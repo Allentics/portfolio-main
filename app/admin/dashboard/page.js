@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { supabase } from "../../lib/supabase";
 import { useRouter } from "next/navigation";
 
@@ -11,11 +11,24 @@ export default function AdminDashboard() {
     const [services, setServices] = useState([]);
     const [projects, setProjects] = useState([]);
     const [status, setStatus] = useState({ type: "", message: "" });
+    const [updating, setUpdating] = useState(false);
     const router = useRouter();
+
+    // Debounce timer ref
+    const timeoutRef = React.useRef(null);
+
+    const debounceSupabase = (callback) => {
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        setUpdating(true);
+        timeoutRef.current = setTimeout(async () => {
+            await callback();
+            setUpdating(false);
+        }, 1000);
+    };
 
     useEffect(() => {
         checkUser();
-        fetchData();
+        fetchData(true);
     }, []);
 
     async function checkUser() {
@@ -27,20 +40,25 @@ export default function AdminDashboard() {
         }
     }
 
-    async function fetchData() {
-        setLoading(true);
-        const { data: settingsData } = await supabase.from("site_settings").select("*");
-        const { data: skillsData } = await supabase.from("skills").select("*").order("id");
-        const { data: servicesData } = await supabase.from("services").select("*").order("id");
-        const { data: projectsData } = await supabase.from("projects").select("*").order("created_at", { ascending: false });
+    async function fetchData(isInitial = false) {
+        if (isInitial && Object.keys(settings).length === 0) setLoading(true);
+        try {
+            const { data: settingsData } = await supabase.from("site_settings").select("*");
+            const { data: skillsData } = await supabase.from("skills").select("*").order("id");
+            const { data: servicesData } = await supabase.from("services").select("*").order("id");
+            const { data: projectsData } = await supabase.from("projects").select("*").order("created_at", { ascending: false });
 
-        const s = {};
-        settingsData?.forEach(item => s[item.key] = item.value);
-        setSettings(s);
-        setSkills(skillsData || []);
-        setServices(servicesData || []);
-        setProjects(projectsData || []);
-        setLoading(false);
+            const s = {};
+            settingsData?.forEach(item => s[item.key] = item.value);
+            setSettings(s);
+            setSkills(skillsData || []);
+            setServices(servicesData || []);
+            setProjects(projectsData || []);
+        } catch (error) {
+            console.error("Fetch error:", error);
+        } finally {
+            setLoading(false);
+        }
     }
 
     const handleSaveSettings = async (e) => {
@@ -61,14 +79,18 @@ export default function AdminDashboard() {
         }
     };
 
-    const handleUpdateSkill = async (id, field, value) => {
-        await supabase.from("skills").update({ [field]: value }).eq("id", id);
-        fetchData();
+    const handleUpdateSkill = (id, field, value) => {
+        setSkills(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s));
+        debounceSupabase(async () => {
+            await supabase.from("skills").update({ [field]: value }).eq("id", id);
+        });
     };
 
-    const handleUpdateService = async (id, field, value) => {
-        await supabase.from("services").update({ [field]: value }).eq("id", id);
-        fetchData();
+    const handleUpdateService = (id, field, value) => {
+        setServices(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s));
+        debounceSupabase(async () => {
+            await supabase.from("services").update({ [field]: value }).eq("id", id);
+        });
     };
 
     const handleAddProject = async () => {
@@ -80,12 +102,14 @@ export default function AdminDashboard() {
         if (!error) fetchData();
     };
 
-    const handleUpdateProject = async (id, field, value) => {
+    const handleUpdateProject = (id, field, value) => {
         let finalValue = value;
         if (field === "tags") finalValue = value.split(",").map(t => t.trim());
 
-        await supabase.from("projects").update({ [field]: finalValue }).eq("id", id);
-        fetchData();
+        setProjects(prev => prev.map(p => p.id === id ? { ...p, [field]: finalValue } : p));
+        debounceSupabase(async () => {
+            await supabase.from("projects").update({ [field]: finalValue }).eq("id", id);
+        });
     };
 
     const handleDeleteProject = async (id) => {
@@ -100,13 +124,30 @@ export default function AdminDashboard() {
         router.push("/admin");
     };
 
-    if (loading) return <div className="p-8 text-center">Loading dashboard...</div>;
+    if (loading && Object.keys(settings).length === 0) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-50 text-gray-500 font-medium">
+                <div className="flex flex-col items-center gap-4">
+                    <div className="w-8 h-8 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></div>
+                    Loading your dashboard...
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-gray-100 p-4 sm:p-8">
             <div className="max-w-6xl mx-auto space-y-8">
                 <div className="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm">
-                    <h1 className="text-2xl font-bold text-gray-900">Portfolio CMS</h1>
+                    <div className="flex items-center gap-4">
+                        <h1 className="text-2xl font-bold text-gray-900">Portfolio CMS</h1>
+                        {updating && (
+                            <span className="flex items-center gap-2 text-xs text-purple-600 font-medium">
+                                <div className="w-2 h-2 bg-purple-600 rounded-full animate-pulse"></div>
+                                Saving...
+                            </span>
+                        )}
+                    </div>
                     <button
                         onClick={handleLogout}
                         className="px-4 py-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-colors"
